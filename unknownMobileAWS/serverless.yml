@@ -1,0 +1,150 @@
+service: ${self:custom.stage}-${self:custom.service.name}
+
+custom:
+  stage: ${opt:stage, 'dev'}
+  service:
+    name: beyondSightings
+  beyondSightingsUserTable:
+    tableName: ${self:service}-users
+  pythonRequirements:
+    usePoetry: false
+    dockerizePip: false
+    useStaticCache: false
+    invalidateCaches: true
+    useDownloadCache: false
+
+frameworkVersion: "3"
+
+plugins:
+  - serverless-dotenv-plugin
+
+provider:
+  name: aws
+  runtime: python3.10
+  region: us-east-1
+  stackName: ${self:service}
+  apiKeys:
+    - myApiKey:
+        - ${env:BEYOND_SIGHTINGS_KEY}
+
+package:
+  individually: false
+  excludeDevDependencies: true
+  include:
+    - "!**/*"
+    - ./lambda/**
+  exclude:
+    - node_modules/**
+    - package.json
+    - package-lock.json
+
+functions:
+  BeyondSightingsLogin:
+    handler: lambda/beyondSightingsLogin.lambda_handler
+    layers:
+      - arn:aws:lambda:us-east-1:594294950148:layer:requests:4
+    name: ${self:custom.stage}-beyondSightingsLogin
+    events:
+      - http:
+          method: POST
+          path: /login
+          cors: true
+
+  BeyondSightingsSignup:
+    handler: lambda/beyondSightingsSignup.lambda_handler
+    layers:
+      - arn:aws:lambda:us-east-1:594294950148:layer:requests:4
+    name: ${self:custom.stage}-beyondSightingsSignup
+    events:
+      - http:
+          method: POST
+          path: /signup
+          cors: true
+
+  BeyondSightingsCreateDynamoUser:
+    handler: lambda/beyondSightingsCreateDynamoUser.lambda_handler
+    name: ${self:custom.stage}-beyondSightingsCreateDynamoUser
+    events:
+      - http:
+          method: POST
+          path: /create-user
+          cors: true
+
+  BeyondSightingsGetUsers:
+    handler: lambda/beyondSightingsGetUsers.lambda_handler
+    name: ${self:custom.stage}-beyondSightingsGetUsers
+    events:
+      - http:
+          method: GET
+          path: /get-user
+          cors: true
+
+resources:
+  Resources:
+    beyondSightingsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:service}-users
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH
+        ProvisionedThroughput:
+          ReadCapacityUnits: 1
+          WriteCapacityUnits: 1
+
+    serviceRole:
+      Type: AWS::IAM::Role
+      Properties:
+        Path: /
+        MaxSessionDuration: 3600
+        Description: Service Role for ${self:custom.stage}-${self:custom.service.name}
+        RoleName: ${self:custom.stage}-serviceRole-${self:custom.service.name}
+        AssumeRolePolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service:
+                  - apigateway.amazonaws.com
+                  - lambda.amazonaws.com
+              Action:
+                - sts:AssumeRole
+        Policies:
+          - PolicyName: LambdaInvokeFunction
+            PolicyDocument:
+              Version: "2012-10-17"
+              Statement:
+                - Effect: Allow
+                  Action: lambda:InvokeFunction
+                  Resource:
+                    - !GetAtt BeyondSightingsLoginLambdaFunction.Arn
+                    - !GetAtt BeyondSightingsSignupLambdaFunction.Arn
+                    - !GetAtt BeyondSightingsCreateDynamoUserLambdaFunction.Arn
+
+    BeyondSightingsDynamoUserRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName: ${self:custom.stage}-beyondSightingsDynamoUserRole
+        AssumeRolePolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: lambda.amazonaws.com
+              Action: sts:AssumeRole
+        Policies:
+          - PolicyName: DynamoDBPolicy
+            PolicyDocument:
+              Version: "2012-10-17"
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - dynamodb:PutItem
+                    - dynamodb:GetItem
+                    - dynamodb:Scan
+                    - dynamodb:Query
+                    - dynamodb:DeleteItem
+                  Resource: !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${self:custom.beyondSightingsUserTable.tableName}
